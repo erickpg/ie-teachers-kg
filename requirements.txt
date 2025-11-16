@@ -1,0 +1,11 @@
+pandas
+beautifulsoup4
+lxml
+transformers
+torch
+spacy
+spacy-transformers
+rapidfuzz
+networkx
+matplotlib
+tqdm
