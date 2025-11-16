@@ -1,6 +1,6 @@
 # IE Teachers Knowledge Graph
 
-Student-friendly pipeline to parse IE University teacher bios, extract entities, normalise them, and build a lightweight knowledge graph. The notebook now fuses structured bullet parsers with dual Hugging Face NER models and a weighted scorer so every relation keeps provenance, confidence, and alias-aware canonical labels.
+Student-friendly pipeline to parse IE University teacher bios, extract entities, normalise them, and build a lightweight knowledge graph.
 
 [![Open In Colab](https://colab.research.googleusercontent.com/assets/colab-badge.svg)](
 https://colab.research.google.com/github/<USER>/ie-teachers-kg/blob/main/notebooks/main.ipynb)
