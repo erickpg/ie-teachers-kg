@@ -96,6 +96,13 @@ _COMP_HINTS = [
     "company",
 ]
 
+_COUNTRY_PATTERNS = [
+    (r"\b(usa|u\.s\.a\.|u\.s\.|united states)\b", "USA"),
+    (r"\b(uk|u\.k\.|united kingdom|england|scotland|wales|northern ireland)\b", "United Kingdom"),
+    (r"\b(uae|united arab emirates)\b", "United Arab Emirates"),
+    (r"\b(spain|españa)\b", "Spain"),
+]
+
 _EXPECTED_RELATION_TYPES: Dict[str, Literal["university", "company"]] = {
     "studied_at": "university",
     "worked_at": "company",
@@ -112,16 +119,18 @@ def canon_org(name: Optional[str]) -> Optional[str]:
     low = norm.lower()
     return ORG_ALIASES.get(low, norm)
 
-
-def canon_location(name: Optional[str]) -> Optional[str]:
-    """Normalise location names and expand aliases."""
-
+def canon_location(name: str) -> str:
+    """Return a coarse, country-first canonical location (e.g., 'USA', 'Spain').
+    If no country pattern is found, return a cleaned version of the input.
+    """
     if not name:
-        return None
-    norm = normalize_name(name)
-    low = norm.lower()
-    return LOCATION_ALIASES.get(low, norm)
-
+        return ""
+    n = normalize_name(name)
+    low = n.lower()
+    for pat, canon in _COUNTRY_PATTERNS:
+        if re.search(pat, low):
+            return canon
+    return n  # fallback: leave as cleaned full string (city/state etc.)
 
 def classify_org(name: Optional[str]) -> Optional[str]:
     """Heuristically classify the organisation type."""
