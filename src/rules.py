@@ -19,9 +19,9 @@ SECTION_STOP_ORGS = {
 }
 
 ORG_ALIASES: Dict[str, str] = {
-    "ie": "IE Business School",
-    "ie university": "IE Business School",
-    "instituto de empresa": "IE Business School",
+    "ie": "IE University",
+    "ie university": "IE University",
+    "instituto de empresa": "IE University",
     "ie business school": "IE Business School",
     "mba ie": "IE Business School",
     "u. de navarra": "Universidad de Navarra",
