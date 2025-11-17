@@ -18,10 +18,26 @@ SECTION_STOP_ORGS = {
     "professional experience",
 }
 
+def _alias_key(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+ORG_ALIAS_BY_KEY: Dict[str, str] = {
+    "iebusinessschool": "IE Business School",
+    "iebbusinessschool": "IE Business School",
+    "ieuniversity": "IE Business School",
+    "institutodeempresa": "IE Business School",
+    "mbaie": "IE Business School",
+    "universityofnavarra": "Universidad de Navarra",
+    "universidaddenavarra": "Universidad de Navarra",
+    "udenavarra": "Universidad de Navarra",
+}
+
+# Backwards-compatible alias map for clustering helpers (uses human-readable keys).
 ORG_ALIASES: Dict[str, str] = {
-    "ie": "IE University",
-    "ie university": "IE University",
-    "instituto de empresa": "IE University",
+    "ie": "IE Business School",
+    "ie university": "IE Business School",
+    "instituto de empresa": "IE Business School",
     "ie business school": "IE Business School",
     "mba ie": "IE Business School",
     "u. de navarra": "Universidad de Navarra",
@@ -33,7 +49,6 @@ ORG_ALIASES: Dict[str, str] = {
 
 LOCATION_ALIASES: Dict[str, str] = {
     "spaing": "Spain",
-    "spain": "Spain",
     "u.k.": "United Kingdom",
     "uk": "United Kingdom",
     "uae": "United Arab Emirates",
@@ -110,14 +125,14 @@ _EXPECTED_RELATION_TYPES: Dict[str, Literal["university", "company"]] = {
 }
 
 
-def canon_org(name: Optional[str]) -> Optional[str]:
+def canon_org(name: Optional[str]) -> str:
     """Normalise organisation names and expand known aliases."""
 
     if not name:
-        return None
+        return ""
     norm = normalize_name(name)
-    low = norm.lower()
-    return ORG_ALIASES.get(low, norm)
+    key = _alias_key(norm)
+    return ORG_ALIAS_BY_KEY.get(key, norm)
 
 def canon_location(name: str) -> str:
     """Return a coarse, country-first canonical location (e.g., 'USA', 'Spain').
@@ -126,6 +141,8 @@ def canon_location(name: str) -> str:
     if not name:
         return ""
     n = normalize_name(name)
+    low = n.lower()
+    n = LOCATION_ALIASES.get(low, n)
     low = n.lower()
     for pat, canon in _COUNTRY_PATTERNS:
         if re.search(pat, low):
