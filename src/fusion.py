@@ -1,236 +1,240 @@
-"""Light-weight alignment and scoring between pattern and NER candidates."""
+"""Line-level fusion between parser output and NER evidence."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Literal, Optional
 
 from rapidfuzz import fuzz
 
-Relation = Literal["studied_at", "worked_at", "teaches", "unknown"]
+from .rules import (
+    SECTION_STOP_ORGS,
+    canon_location,
+    canon_org,
+    classify_org,
+    normalize_degree,
+    year_bin,
+)
+
+Relation = Literal["worked_at", "studied_at", "teaches", "unknown"]
 OrgType = Literal["university", "company", "unknown"]
-Source = Literal["pattern", "ner_en", "ner_xlm"]
 
-FUSION_WEIGHTS: Dict[str, float] = {
-    "bias_pattern": 0.55,
-    "bias_ner_en": 0.50,
-    "bias_ner_xlm": 0.50,
-    "agreement_bonus": 0.20,
-    "section_prior_match": 0.10,
-    "alias_canon_bonus": 0.05,
-    "org_type_bonus": 0.05,
-    "penalty_conflict_type": -0.10,
-    "penalty_garbage": -0.15,
-}
-
-_SECTION_PRIORS: Dict[str, Relation] = {
+_SECTION_RELATIONS: Dict[str, Relation] = {
     "corporate_experience": "worked_at",
     "academic_background": "studied_at",
+    "academic_experience": "teaches",
+}
+
+_EXPECTED_TYPES: Dict[Relation, OrgType] = {
+    "worked_at": "company",
+    "studied_at": "university",
+    "teaches": "university",
+    "unknown": "unknown",
 }
 
 
 @dataclass
-class Candidate:
-    """Evidence fragment extracted from either a pattern or NER source."""
+class LineCandidate:
+    """Single fused candidate extracted from one line."""
 
     relation: Relation
-    source: Source
     section: str
-    line_idx: int
     text_span: str
-    org_raw: Optional[str] = None
-    org_norm: Optional[str] = None
-    org_canon: Optional[str] = None
-    org_type_guess: OrgType = "unknown"
-    location_raw: Optional[str] = None
-    location_norm: Optional[str] = None
-    location_canon: Optional[str] = None
     role: Optional[str] = None
+    course: Optional[str] = None
+    org_raw: Optional[str] = None
+    org_canon: Optional[str] = None
+    org_type: OrgType = "unknown"
+    location_raw: Optional[str] = None
+    location_canon: Optional[str] = None
     start_year: Optional[int] = None
     end_year: Optional[int] = None
-    end_year_text: Optional[str] = None
+    year: Optional[int] = None
+    year_bin: Optional[str] = None
     degree_text: Optional[str] = None
     degree_level: Optional[str] = None
     field: Optional[str] = None
-    year: Optional[int] = None
-    year_bin: Optional[str] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
+    sources: List[str] = dc_field(default_factory=list)
+    meta: Dict[str, Any] = dc_field(default_factory=dict)
 
 
-@dataclass
-class Scored:
-    """Candidate enriched with a scalar score for downstream selection."""
-
-    key: str
-    score: float
-    reasons: List[str]
-    merged: Candidate
+def _relation_for_section(section: str) -> Relation:
+    return _SECTION_RELATIONS.get(section, "unknown")
 
 
-def _org_string(cand: Candidate) -> str:
-    return cand.org_canon or cand.org_norm or cand.org_raw or ""
+def _expected_type(relation: Relation) -> OrgType:
+    return _EXPECTED_TYPES.get(relation, "unknown")
 
 
-def _merge_values(primary: Optional[Any], secondary: Optional[Any]) -> Optional[Any]:
-    if primary not in (None, ""):
-        return primary
-    return secondary
+def _alnum_length(text: Optional[str]) -> int:
+    if not text:
+        return 0
+    return sum(ch.isalnum() for ch in text)
 
 
-def _merge_candidate(base: Candidate, incoming: Candidate) -> Candidate:
-    merged = Candidate(
-        relation=base.relation or incoming.relation,
-        source=base.source,
-        section=base.section or incoming.section,
-        line_idx=min(base.line_idx, incoming.line_idx),
-        text_span=max(base.text_span, incoming.text_span, key=len),
-        org_raw=_merge_values(base.org_raw, incoming.org_raw),
-        org_norm=_merge_values(base.org_norm, incoming.org_norm),
-        org_canon=_merge_values(base.org_canon, incoming.org_canon),
-        org_type_guess=base.org_type_guess if base.org_type_guess != "unknown" else incoming.org_type_guess,
-        location_raw=_merge_values(base.location_raw, incoming.location_raw),
-        location_norm=_merge_values(base.location_norm, incoming.location_norm),
-        location_canon=_merge_values(base.location_canon, incoming.location_canon),
-        role=_merge_values(base.role, incoming.role),
-        start_year=_merge_values(base.start_year, incoming.start_year),
-        end_year=_merge_values(base.end_year, incoming.end_year),
-        end_year_text=_merge_values(base.end_year_text, incoming.end_year_text),
-        degree_text=_merge_values(base.degree_text, incoming.degree_text),
-        degree_level=_merge_values(base.degree_level, incoming.degree_level),
-        field=_merge_values(base.field, incoming.field),
-        year=_merge_values(base.year, incoming.year),
-        year_bin=_merge_values(base.year_bin, incoming.year_bin),
-        meta={**incoming.meta, **base.meta},
-    )
-    sources = list(dict.fromkeys(incoming.meta.get("sources", []) + base.meta.get("sources", [])))
-    merged.meta["sources"] = sources or [base.source]
-    if incoming.meta.get("alias_hit") or base.meta.get("alias_hit"):
-        merged.meta["alias_hit"] = True
-    if incoming.meta.get("agreement") or base.meta.get("agreement"):
-        merged.meta["agreement"] = True
-    return merged
+def _select_ner_org(ner: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
+    if not ner:
+        return None
+    orgs = ner.get("orgs") or []
+    if not orgs:
+        return None
+    return orgs[0]["text"].strip()
 
 
-def align_candidates(pattern_cands: List[Candidate], ner_cands: List[Candidate]) -> List[Candidate]:
-    """Align candidates when their organisations overlap in nearby lines."""
-
-    aligned: List[Candidate] = []
-    used: set[int] = set()
-    for pattern in pattern_cands:
-        merged = Candidate(**{**pattern.__dict__, "meta": dict(pattern.meta)})
-        merged.meta.setdefault("sources", [pattern.source])
-        for idx, ner in enumerate(ner_cands):
-            if idx in used or pattern.section != ner.section:
-                continue
-            if abs(pattern.line_idx - ner.line_idx) > 1:
-                continue
-            org_a = _org_string(pattern)
-            org_b = _org_string(ner)
-            if not org_a or not org_b:
-                continue
-            similarity = fuzz.WRatio(org_a, org_b)
-            if similarity >= 90:
-                merged = _merge_candidate(merged, ner)
-                merged.meta["agreement"] = True
-                used.add(idx)
-        aligned.append(merged)
-    for idx, candidate in enumerate(ner_cands):
-        if idx in used:
-            continue
-        carry = Candidate(**{**candidate.__dict__, "meta": dict(candidate.meta)})
-        carry.meta.setdefault("sources", [candidate.source])
-        aligned.append(carry)
-    return aligned
+def _select_ner_location(ner: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
+    locs = ner.get("locs") or []
+    if not locs:
+        return None
+    return locs[0]["text"].strip()
 
 
-def make_key(cand: Candidate) -> str:
-    """Build a stable key per relation for deduplication."""
-
-    if cand.relation == "worked_at":
-        return f"worked_at|{_org_string(cand)}"
-    if cand.relation == "studied_at":
-        degree_key = cand.degree_level or cand.degree_text or "unknown"
-        year_key = cand.year or cand.year_bin or "any"
-        return f"studied_at|{_org_string(cand)}|{degree_key}|{year_key}"
-    if cand.relation == "teaches":
-        return f"teaches|{cand.role or cand.text_span}"
-    return f"unknown|{cand.section}|{cand.line_idx}"
-
-
-def _expected_type(relation: Relation) -> Optional[OrgType]:
-    if relation == "worked_at":
-        return "company"
-    if relation == "studied_at":
-        return "university"
+def _extract_year_from_dates(ner: Dict[str, List[Dict[str, Any]]]) -> Optional[int]:
+    for ent in ner.get("dates") or []:
+        match = re.search(r"(19|20)\d{2}", ent["text"])
+        if match:
+            return int(match.group(0))
     return None
 
 
-def score_candidate(candidate: Candidate, weights: Optional[Dict[str, float]] = None) -> Scored:
-    """Score a candidate using the linear model and track textual reasons."""
+def _build_base_orgs(
+    relation: Relation, parsed: Optional[Dict[str, Any]], ner: Dict[str, Any]
+) -> List[Optional[str]]:
+    parsed_orgs: List[Optional[str]] = []
+    if parsed:
+        if relation == "studied_at":
+            unis = parsed.get("university")
+            if isinstance(unis, list):
+                parsed_orgs = unis
+            elif unis:
+                parsed_orgs = [unis]
+        elif relation == "worked_at":
+            if parsed.get("org"):
+                parsed_orgs = [parsed.get("org")]
+        elif relation == "teaches":
+            if parsed.get("center"):
+                parsed_orgs = [parsed.get("center")]
 
-    weights = weights or FUSION_WEIGHTS
+    parsed_orgs = [org for org in parsed_orgs if org]
+    if parsed_orgs:
+        return parsed_orgs
+
+    ner_org = _select_ner_org(ner)
+    if ner_org:
+        return [ner_org]
+    return [None]
+
+
+def _score_candidate(
+    relation: Relation,
+    section: str,
+    org_raw: Optional[str],
+    org_from_parser: bool,
+    ner_org: Optional[str],
+    org_type: OrgType,
+) -> float:
     score = 0.0
-    reasons: List[str] = []
-    sources = candidate.meta.get("sources") or [candidate.source]
-    for src in dict.fromkeys(sources):
-        weight_key = f"bias_{src}"
-        if weight_key in weights:
-            score += weights[weight_key]
-            reasons.append(f"{weight_key}+{weights[weight_key]:.2f}")
-    if candidate.meta.get("agreement") and "agreement_bonus" in weights:
-        score += weights["agreement_bonus"]
-        reasons.append(f"agreement+{weights['agreement_bonus']:.2f}")
-    prior = _SECTION_PRIORS.get(candidate.section)
-    if prior and prior == candidate.relation and "section_prior_match" in weights:
-        score += weights["section_prior_match"]
-        reasons.append(f"section_prior+{weights['section_prior_match']:.2f}")
-    if candidate.meta.get("alias_hit") and "alias_canon_bonus" in weights:
-        score += weights["alias_canon_bonus"]
-        reasons.append(f"alias_bonus+{weights['alias_canon_bonus']:.2f}")
-    expected = _expected_type(candidate.relation)
-    if expected and candidate.org_type_guess != "unknown":
-        if candidate.org_type_guess == expected and "org_type_bonus" in weights:
-            score += weights["org_type_bonus"]
-            reasons.append(f"org_type+{weights['org_type_bonus']:.2f}")
-        elif candidate.org_type_guess != expected and "penalty_conflict_type" in weights:
-            score += weights["penalty_conflict_type"]
-            reasons.append(f"type_penalty{weights['penalty_conflict_type']:+.2f}")
-    org_label = _org_string(candidate)
-    if (not org_label or len(org_label) <= 2) and "penalty_garbage" in weights:
-        score += weights["penalty_garbage"]
-        reasons.append(f"garbage{weights['penalty_garbage']:+.2f}")
-    return Scored(key=make_key(candidate), score=score, reasons=reasons, merged=candidate)
+    if org_from_parser:
+        score += 0.6
+    if org_from_parser and ner_org and org_raw:
+        if fuzz.WRatio(org_raw, ner_org) >= 90:
+            score += 0.2
+    if _relation_for_section(section) == relation:
+        score += 0.1
+    expected = _expected_type(relation)
+    if expected != "unknown" and org_type == expected:
+        score += 0.1
+    if (org_raw or "").lower() in SECTION_STOP_ORGS or _alnum_length(org_raw) < 3:
+        score -= 0.2
+    return round(score, 3)
 
 
-def select_entities(scored: List[Scored], threshold: float = 0.65) -> List[Scored]:
-    """Keep the best-scoring candidate per key above the threshold."""
+def fuse_line(
+    section: str,
+    line: str,
+    parsed: Optional[Dict[str, Any]],
+    ner: Optional[Dict[str, List[Dict[str, Any]]]],
+) -> List[LineCandidate]:
+    """Fuse parser and NER output for a single line."""
 
-    best: Dict[str, Scored] = {}
-    for item in scored:
-        existing = best.get(item.key)
-        if existing is None or item.score > existing.score:
-            best[item.key] = item
-    selected = [entry for entry in best.values() if entry.score >= threshold]
-    return sorted(selected, key=lambda s: s.score, reverse=True)
+    relation = _relation_for_section(section)
+    ner = ner or {"orgs": [], "locs": [], "dates": []}
+    sources: List[str] = []
+    if parsed:
+        sources.append("parser")
+    if any(ner.values()):
+        sources.append("ner")
 
+    base_orgs = _build_base_orgs(relation, parsed, ner)
+    location = parsed.get("location") if parsed else None
+    location_list = parsed.get("location_list") if parsed else None
+    if not location:
+        location = _select_ner_location(ner)
+    start_year = parsed.get("start_year") if parsed else None
+    end_year = parsed.get("end_year") if parsed else None
+    end_year_text = parsed.get("end_year_text") if parsed else None
+    year = parsed.get("year") if parsed else None
+    if year is None and start_year is None:
+        year = _extract_year_from_dates(ner)
+    degree_text = parsed.get("degree_text") if parsed else None
+    degree_level = None
+    field = None
+    if relation == "studied_at":
+        degree_level, field = normalize_degree(degree_text)
+        if year is None:
+            year = start_year
+    year_value = year or start_year
+    year_bin_value = year_bin(year_value) if year_value else None
+    candidate_list: List[LineCandidate] = []
 
-def fusion_pipeline(
-    sections: Dict[str, str],
-    build_pattern,
-    build_ner,
-    weights: Optional[Dict[str, float]] = None,
-    threshold: float = 0.65,
-) -> Dict[str, List[Scored]]:
-    """Helper to run pattern + NER candidates through alignment and scoring."""
+    ner_org_text = _select_ner_org(ner)
 
-    weights = weights or FUSION_WEIGHTS
-    fused: Dict[str, List[Scored]] = {"worked_at": [], "studied_at": [], "teaches": [], "unknown": []}
-    for section, text in sections.items():
-        pattern_cands = build_pattern(section, text)
-        ner_cands = build_ner(section, text)
-        aligned = align_candidates(pattern_cands, ner_cands)
-        scored = [score_candidate(c, weights) for c in aligned]
-        accepted = select_entities(scored, threshold)
-        for item in accepted:
-            fused.setdefault(item.merged.relation, []).append(item)
-    return fused
+    for idx, org_raw in enumerate(base_orgs):
+        resolved_location = location
+        if relation == "studied_at" and isinstance(location_list, list):
+            if idx < len(location_list):
+                resolved_location = location_list[idx]
+        org_canon = canon_org(org_raw)
+        location_canon = canon_location(resolved_location)
+        org_type = classify_org(org_canon) or "unknown"
+        candidate = LineCandidate(
+            relation=relation,
+            section=section,
+            text_span=line,
+            role=parsed.get("role") if parsed else None,
+            course=parsed.get("course") if parsed else None,
+            org_raw=org_raw,
+            org_canon=org_canon,
+            org_type=org_type,
+            location_raw=resolved_location,
+            location_canon=location_canon,
+            start_year=start_year,
+            end_year=end_year,
+            year=year,
+            year_bin=year_bin_value,
+            degree_text=degree_text,
+            degree_level=degree_level,
+            field=field,
+            sources=list(dict.fromkeys(sources)),
+            meta={},
+        )
+        if end_year_text:
+            candidate.meta["end_year_text"] = end_year_text
+        candidate.meta["sources"] = candidate.sources or ["ner"]
+
+        org_from_parser = org_raw is not None and (parsed is not None)
+        if org_from_parser and ner_org_text and org_raw:
+            similarity = fuzz.WRatio(org_raw, ner_org_text)
+            if similarity < 90:
+                candidate.meta["alt_org"] = ner_org_text
+        candidate.meta["score"] = _score_candidate(
+            relation,
+            section,
+            org_raw,
+            org_from_parser,
+            ner_org_text,
+            org_type,
+        )
+        candidate_list.append(candidate)
+
+    return candidate_list

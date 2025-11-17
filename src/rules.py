@@ -3,66 +3,164 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, Literal, Optional, Tuple
 
-_DEGREE_PAT = re.compile(
-    r"\b(PhD|MBA|MSc|MA|MS|MEng|BSc|BA|BEng|Doctor|Master|Bachelor)\b",
-    re.IGNORECASE,
-)
-_FIELD_PAT = re.compile(r"in ([A-Z][A-Za-z &/]+)")
-_YEAR_PAT = re.compile(r"(19|20)\d{2}")
-_COURSE_PAT = re.compile(r"course(?:s)?\s+such as\s+([^.;]+)", re.IGNORECASE)
-_COURSE_SPLIT = re.compile(r",| and ")
+from .normalize import normalize_name
 
-_UNI_KEYWORDS = ["university", "college", "school", "institute"]
-_COMP_KEYWORDS = ["consulting", "bank", "corp", "company", "group", "llc", "sa", "sl"]
+SECTION_STOP_ORGS = {
+    "academic experience",
+    "academic exp",
+    "corporate experience",
+    "academic background",
+    "courses taught",
+    "education",
+    "publications",
+    "professional experience",
+}
+
+ORG_ALIASES: Dict[str, str] = {
+    "ie": "IE Business School",
+    "ie university": "IE Business School",
+    "instituto de empresa": "IE Business School",
+    "ie business school": "IE Business School",
+    "mba ie": "IE Business School",
+    "u. de navarra": "Universidad de Navarra",
+    "u de navarra": "Universidad de Navarra",
+    "u navarra": "Universidad de Navarra",
+    "universidad navarra": "Universidad de Navarra",
+    "university of navarra": "Universidad de Navarra",
+}
+
+LOCATION_ALIASES: Dict[str, str] = {
+    "spaing": "Spain",
+    "spain": "Spain",
+    "u.k.": "United Kingdom",
+    "uk": "United Kingdom",
+    "uae": "United Arab Emirates",
+}
+
+DEGREE_MAP: Dict[str, str] = {
+    "postdoctoral": "Postdoc",
+    "post-doctoral": "Postdoc",
+    "postdoctoral studies": "Postdoc",
+    "postdoc": "Postdoc",
+    "phd": "PhD",
+    "ph.d.": "PhD",
+    "doctor": "PhD",
+    "e.m.b.a.": "MBA",
+    "m.b.a.": "MBA",
+    "mba": "MBA",
+    "msc": "MSc",
+    "m.sc.": "MSc",
+    "ms": "MSc",
+    "master": "MSc",
+    "ma": "MA",
+    "m.a.": "MA",
+    "bsc": "BSc",
+    "b.sc.": "BSc",
+    "ba": "BA",
+    "b.a.": "BA",
+    "meng": "MEng",
+    "beng": "BEng",
+    "certificate": "Certificate",
+    "executive certificate": "Certificate",
+    "diploma": "Certificate",
+}
+
+_UNI_HINTS = [
+    "university",
+    "college",
+    "school",
+    "institute",
+    "politécnica",
+    "escuela",
+    "facultad",
+]
+
+_COMP_HINTS = [
+    "studio",
+    "capital",
+    "partners",
+    "group",
+    "consulting",
+    "bank",
+    "digital",
+    "bcg",
+    "etisalat",
+    "vidivixi",
+    "halliburton",
+    "ge",
+    "permasteelisa",
+    "millwood",
+    "corp",
+    "company",
+]
+
+_EXPECTED_RELATION_TYPES: Dict[str, Literal["university", "company"]] = {
+    "studied_at": "university",
+    "worked_at": "company",
+    "teaches": "university",
+}
 
 
-def extract_degrees_and_years(text: str) -> List[Dict[str, Optional[str]]]:
-    """Return list of detected degree, field and year information."""
+def canon_org(name: Optional[str]) -> Optional[str]:
+    """Normalise organisation names and expand known aliases."""
 
-    results: List[Dict[str, Optional[str]]] = []
-    for match in _DEGREE_PAT.finditer(text):
-        degree = match.group(1)
-        span = text[match.end() : match.end() + 80]
-        field_match = _FIELD_PAT.search(span)
-        year_match = _YEAR_PAT.search(span)
-        results.append(
-            {
-                "degree": degree,
-                "field": field_match.group(1) if field_match else None,
-                "year": int(year_match.group(0)) if year_match else None,
-            }
-        )
-    return results
+    if not name:
+        return None
+    norm = normalize_name(name)
+    low = norm.lower()
+    return ORG_ALIASES.get(low, norm)
 
 
-def extract_courses(text: str) -> List[str]:
-    """Extract course names using lightweight patterns."""
+def canon_location(name: Optional[str]) -> Optional[str]:
+    """Normalise location names and expand aliases."""
 
-    courses: List[str] = []
-    for match in _COURSE_PAT.finditer(text):
-        chunk = match.group(1)
-        for piece in _COURSE_SPLIT.split(chunk):
-            clean = piece.strip(" .")
-            if clean:
-                courses.append(clean)
-    return courses
+    if not name:
+        return None
+    norm = normalize_name(name)
+    low = norm.lower()
+    return LOCATION_ALIASES.get(low, norm)
 
 
-def classify_org(name: str) -> Optional[str]:
-    """Heuristically classify an organisation as university/company."""
+def classify_org(name: Optional[str]) -> Optional[str]:
+    """Heuristically classify the organisation type."""
 
-    low = (name or "").lower()
-    if any(key in low for key in _UNI_KEYWORDS):
-        return "university"
-    if any(key in low for key in _COMP_KEYWORDS):
-        return "company"
+    if not name:
+        return None
+    low = name.lower()
+    for keyword in _UNI_HINTS:
+        if keyword in low:
+            return "university"
+    for keyword in _COMP_HINTS:
+        if keyword in low:
+            return "company"
     return None
 
 
-def year_bin(year: int, width: int = 5) -> Optional[str]:
-    """Return the inclusive 5-year bin label for the provided year."""
+def normalize_degree(text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Return canonical degree level and extracted field if available."""
+
+    if not text:
+        return None, None
+    clean = text.strip()
+    lowered = clean.lower()
+    lowered_simple = lowered.replace(".", "")
+    level = None
+    for key, value in DEGREE_MAP.items():
+        key_norm = key.lower().replace(".", "")
+        if key_norm in lowered_simple:
+            level = value
+            break
+    field = None
+    match = re.search(r"in ([A-Za-z0-9 &/\-]+)", clean, re.IGNORECASE)
+    if match:
+        field = match.group(1).strip()
+    return level, field
+
+
+def year_bin(year: Optional[int], width: int = 5) -> Optional[str]:
+    """Return the inclusive year bin for the provided width."""
 
     if year is None or year < 1900:
         return None
