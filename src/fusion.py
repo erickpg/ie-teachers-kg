@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from rapidfuzz import fuzz
 
-from .rules import (
+from rules import (
     SECTION_STOP_ORGS,
     canon_location,
     canon_org,
