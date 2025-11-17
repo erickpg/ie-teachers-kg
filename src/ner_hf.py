@@ -6,6 +6,8 @@ from typing import Any, Dict, List
 
 from transformers import pipeline
 
+from .rules import SECTION_STOP_ORGS
+
 
 def load_pipelines() -> Dict[str, Any]:
     """Load both HF NER pipelines with deterministic settings."""
@@ -64,3 +66,33 @@ def merge_entities(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> List[Dic
         if not replaced:
             merged.append(ent)
     return merged
+
+
+def ner_on_line(line: str, pipes: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """Run NER on a single line returning grouped entities."""
+
+    results = {"orgs": [], "locs": [], "dates": []}
+    if not line.strip():
+        return results
+
+    orgs: List[Dict[str, Any]] = []
+    locs: List[Dict[str, Any]] = []
+    dates: List[Dict[str, Any]] = []
+
+    for name, pipe in (pipes or {}).items():
+        for ent in run_ner(line, pipe):
+            label = (ent.get("label") or "").upper()
+            enriched = {**ent, "source": name}
+            if label in {"ORG", "ORGANIZATION"}:
+                if enriched["text"].lower() in SECTION_STOP_ORGS:
+                    continue
+                orgs = merge_entities(orgs, [enriched])
+            elif label in {"LOC", "GPE"}:
+                locs = merge_entities(locs, [enriched])
+            elif label == "DATE":
+                dates = merge_entities(dates, [enriched])
+
+    results["orgs"] = orgs
+    results["locs"] = locs
+    results["dates"] = dates
+    return results
