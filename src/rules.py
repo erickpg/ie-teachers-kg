@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Dict, Literal, Optional, Tuple
 
-from .normalize import normalize_name
+from normalize import normalize_name
 
 SECTION_STOP_ORGS = {
     "academic experience",
