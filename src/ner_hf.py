@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 from transformers import pipeline
 
-from .rules import SECTION_STOP_ORGS
+from rules import SECTION_STOP_ORGS
 
 
 def load_pipelines() -> Dict[str, Any]:
