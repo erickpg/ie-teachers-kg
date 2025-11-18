@@ -7,6 +7,79 @@ from typing import Dict, Literal, Optional, Tuple
 
 from normalize import normalize_name
 
+# Hard exceptions always win
+ORG_HARD_POSITIVE = {
+    "ie business school": "university",
+    "ie university": "university",
+    "universidad de navarra": "university",
+    "universidad complutense de madrid": "university",
+}
+ORG_HARD_NEGATIVE = {
+    "bank of spain": "company",
+    "banco de españa": "company",
+}
+
+# Section names we use as priors
+SECTION_PRIOR = {
+    "academic_background": "university",
+    "academic_experience": "university",
+    "corporate_experience": "company",
+}
+
+# Lexical cues (soft signals)
+UNIV_CUES = [
+    "university",
+    "universidad",
+    "université",
+    "università",
+    "universidade",
+    "college",
+    "school of",
+    "faculty",
+    "facultad",
+    "escuela",
+    "polytechnic",
+    "politécnica",
+    "institute of technology",
+    "institut of technology",
+]
+COMP_CUES = [
+    "inc",
+    "llc",
+    "ltd",
+    "ltda",
+    "s.a.",
+    "s.l.",
+    "gmbh",
+    "ag",
+    "bv",
+    "spa",
+    "pty",
+    "partners",
+    "group",
+    "consulting",
+    "capital",
+    "bank",
+    "studio",
+    "lab",
+    "labs",
+    "holding",
+    "fund",
+]
+GOV_CUES = [
+    "ministry",
+    "council",
+    "agency",
+    "commission",
+    "secretariat",
+    "court",
+    "bank of",
+    "central bank",
+    "city of",
+    "state of",
+    "department of",
+]
+
 SECTION_STOP_ORGS = {
     "academic experience",
     "academic exp",
@@ -17,6 +90,49 @@ SECTION_STOP_ORGS = {
     "publications",
     "professional experience",
 }
+
+HONORS_THESIS_TOKENS = (
+    "summa cum laude",
+    "magna cum laude",
+    "cum laude",
+    "thesis",
+    "dissertation",
+    "with a thesis",
+    "with thesis",
+    "honors",
+    "honours",
+)
+
+PREP_STRIP_RE = re.compile(r"^(?:by|at|in|of)\s+", re.I)
+
+
+def strip_preps(s: str) -> str:
+    return PREP_STRIP_RE.sub("", s or "").strip()
+
+
+def looks_like_honor(s: str) -> bool:
+    low = (s or "").lower()
+    return any(tok in low for tok in HONORS_THESIS_TOKENS)
+
+
+def plausible_org(s: str) -> bool:
+    if not s:
+        return False
+    t = strip_preps(normalize_name(s))
+    low = t.lower()
+    if low in SECTION_STOP_ORGS:
+        return False
+    if looks_like_honor(t):
+        return False
+    if len(t) > 100:
+        return False
+    toks = [w for w in re.split(r"\W+", t) if w]
+    if len(toks) < 2:
+        return False
+    letters = sum(ch.isalpha() for ch in t)
+    if letters / max(1, len(t)) < 0.6:
+        return False
+    return True
 
 def _alias_key(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
@@ -82,35 +198,6 @@ DEGREE_MAP: Dict[str, str] = {
     "diploma": "Certificate",
 }
 
-_UNI_HINTS = [
-    "university",
-    "college",
-    "school",
-    "institute",
-    "politécnica",
-    "escuela",
-    "facultad",
-]
-
-_COMP_HINTS = [
-    "studio",
-    "capital",
-    "partners",
-    "group",
-    "consulting",
-    "bank",
-    "digital",
-    "bcg",
-    "etisalat",
-    "vidivixi",
-    "halliburton",
-    "ge",
-    "permasteelisa",
-    "millwood",
-    "corp",
-    "company",
-]
-
 _COUNTRY_PATTERNS = [
     (r"\b(usa|u\.s\.a\.|u\.s\.|united states)\b", "USA"),
     (r"\b(uk|u\.k\.|united kingdom|england|scotland|wales|northern ireland)\b", "United Kingdom"),
@@ -150,18 +237,29 @@ def canon_location(name: str) -> str:
     return n  # fallback: leave as cleaned full string (city/state etc.)
 
 def classify_org(name: Optional[str]) -> Optional[str]:
-    """Heuristically classify the organisation type."""
+    """Backwards compatible alias for the new soft label helper."""
 
     if not name:
         return None
-    low = name.lower()
-    for keyword in _UNI_HINTS:
-        if keyword in low:
-            return "university"
-    for keyword in _COMP_HINTS:
-        if keyword in low:
-            return "company"
-    return None
+    label = soft_name_label(name)
+    return None if label == "unknown" else label
+
+
+def soft_name_label(n: str) -> Literal["university", "company", "government", "unknown"]:
+    """Heuristic classifier from the NAME only (soft)."""
+
+    low = (n or "").lower()
+    if low in ORG_HARD_POSITIVE:
+        return "university"
+    if low in ORG_HARD_NEGATIVE:
+        return ORG_HARD_NEGATIVE[low]
+    if any(c in low for c in UNIV_CUES):
+        return "university"
+    if any(c in low for c in GOV_CUES):
+        return "government"
+    if any(c in low for c in COMP_CUES):
+        return "company"
+    return "unknown"
 
 
 def normalize_degree(text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:

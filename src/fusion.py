@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Literal, Optional
 
@@ -10,10 +11,16 @@ from rapidfuzz import fuzz
 
 from rules import (
     SECTION_STOP_ORGS,
+    SECTION_PRIOR,
     canon_location,
     canon_org,
     classify_org,
+    plausible_org,
+    soft_name_label,
+    strip_preps,
     normalize_degree,
+    ORG_HARD_NEGATIVE,
+    ORG_HARD_POSITIVE,
     year_bin,
 )
 
@@ -238,3 +245,100 @@ def fuse_line(
         candidate_list.append(candidate)
 
     return candidate_list
+
+
+def collect_org_evidence(records) -> Dict[str, Dict[str, Any]]:
+    """Aggregate soft evidence for each canonical organisation."""
+
+    evd = defaultdict(
+        lambda: {
+            "mentions": 0,
+            "by_relation": Counter(),
+            "by_section_prior": Counter(),
+            "by_name_label": Counter(),
+        }
+    )
+
+    def _add(org_raw: str, relation: str, section: str):
+        if not org_raw:
+            return
+        if not plausible_org(org_raw):
+            return
+        org = canon_org(strip_preps(org_raw))
+        lbl = soft_name_label(org)
+        prior = SECTION_PRIOR.get(section, None)
+
+        entry = evd[org]
+        entry["mentions"] += 1
+        entry["by_relation"][relation] += 1
+        if prior:
+            entry["by_section_prior"][prior] += 1
+        entry["by_name_label"][lbl] += 1
+
+    for rec in records:
+        for study in rec.get("studies", []):
+            _add(
+                study.get("university_canon") or study.get("university"),
+                "studied_at",
+                study.get("source_section", ""),
+            )
+        for work in rec.get("work", []):
+            _add(
+                work.get("company_canon")
+                or work.get("company")
+                or work.get("university_canon")
+                or work.get("university"),
+                "worked_at",
+                work.get("source_section", ""),
+            )
+        for course in rec.get("courses", []):
+            _add(
+                course.get("center_canon")
+                or course.get("center")
+                or course.get("university")
+                or course.get("company"),
+                "teaches",
+                course.get("source_section", ""),
+            )
+
+    return evd
+
+
+def resolve_final_org_types(org_evd: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    """Resolve the final organisation type via weighted voting."""
+
+    final: Dict[str, str] = {}
+    for org, evidence in org_evd.items():
+        low = org.lower()
+        if low in ORG_HARD_POSITIVE:
+            final[org] = "university"
+            continue
+        if low in ORG_HARD_NEGATIVE:
+            final[org] = ORG_HARD_NEGATIVE[low]
+            continue
+
+        score = Counter()
+        score["university"] += 3 * evidence["by_relation"].get("studied_at", 0)
+        score["university"] += 2 * evidence["by_relation"].get("teaches", 0)
+        score["company"] += 2 * evidence["by_relation"].get("worked_at", 0)
+
+        for lbl, cnt in evidence["by_name_label"].items():
+            if lbl in ("university", "company", "government"):
+                score[lbl] += 2 * cnt
+
+        for prior, cnt in evidence["by_section_prior"].items():
+            if prior in ("university", "company"):
+                score[prior] += cnt
+
+        if score:
+            winner = score.most_common(1)[0][0]
+        else:
+            winner = "unknown"
+
+        name_label = soft_name_label(org)
+        if winner == "university" and name_label in ("company", "government"):
+            winner = name_label
+
+        final[org] = winner
+
+    return final
