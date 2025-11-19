@@ -60,6 +60,7 @@ COMP_CUES = [
     "consulting",
     "capital",
     "bank",
+    "banco",
     "studio",
     "lab",
     "labs",
@@ -148,7 +149,11 @@ def plausible_org(s: str) -> bool:
         return False
     toks = [w for w in re.split(r"\W+", t) if w]
     if len(toks) < 2:
-        return False
+        if not toks:
+            return False
+        token = toks[0]
+        if not (token.isupper() and len(token) >= 3):
+            return False
     letters = sum(ch.isalpha() for ch in t)
     if letters / max(1, len(t)) < 0.6:
         return False
@@ -237,7 +242,7 @@ def canon_org(name: Optional[str]) -> str:
 
     if not name:
         return ""
-    norm = normalize_name(name)
+    norm = normalize_name(strip_preps(name))
     key = _alias_key(norm)
     return ORG_ALIAS_BY_KEY.get(key, norm)
 
