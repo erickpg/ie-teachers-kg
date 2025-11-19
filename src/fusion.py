@@ -23,6 +23,7 @@ from rules import (
     ORG_HARD_POSITIVE,
     year_bin,
 )
+from pattern_extractor import org_candidates_from_text
 
 Relation = Literal["worked_at", "studied_at", "teaches", "unknown"]
 OrgType = Literal["university", "company", "unknown"]
@@ -105,7 +106,10 @@ def _extract_year_from_dates(ner: Dict[str, List[Dict[str, Any]]]) -> Optional[i
 
 
 def _build_base_orgs(
-    relation: Relation, parsed: Optional[Dict[str, Any]], ner: Dict[str, Any]
+    relation: Relation,
+    parsed: Optional[Dict[str, Any]],
+    ner: Dict[str, Any],
+    line_text: str,
 ) -> List[Optional[str]]:
     parsed_orgs: List[Optional[str]] = []
     if parsed:
@@ -125,6 +129,10 @@ def _build_base_orgs(
     parsed_orgs = [org for org in parsed_orgs if org]
     if parsed_orgs:
         return parsed_orgs
+
+    pattern_orgs = org_candidates_from_text(line_text)
+    if pattern_orgs:
+        return pattern_orgs
 
     ner_org = _select_ner_org(ner)
     if ner_org:
@@ -172,7 +180,7 @@ def fuse_line(
     if any(ner.values()):
         sources.append("ner")
 
-    base_orgs = _build_base_orgs(relation, parsed, ner)
+    base_orgs = _build_base_orgs(relation, parsed, ner, line)
     location = parsed.get("location") if parsed else None
     location_list = parsed.get("location_list") if parsed else None
     if not location:
@@ -201,7 +209,7 @@ def fuse_line(
         if relation == "studied_at" and isinstance(location_list, list):
             if idx < len(location_list):
                 resolved_location = location_list[idx]
-        org_canon = canon_org(org_raw)
+        org_canon = canon_org(strip_preps(org_raw))
         location_canon = canon_location(resolved_location)
         org_type = classify_org(org_canon) or "unknown"
         candidate = LineCandidate(

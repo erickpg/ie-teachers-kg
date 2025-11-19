@@ -20,6 +20,7 @@ https://colab.research.google.com/github/<USER>/ie-teachers-kg/blob/main/noteboo
 ## Outputs
 Running the notebook produces the following artifacts inside `outputs/`:
 - `nodes.csv`, `edges.csv`, `graph.gexf` with the NetworkX knowledge graph.
+- `graph.html`, an interactive force-directed view with colours per entity type, relation legend, and node sizes driven by degree centrality.
 - QA snippets, plots, and a final ZIP bundle saved as `ie-teachers-kg_submit_YYYYMMDD.zip` containing the notebook, data subset, requirements, and outputs.
 
 Each notebook section contains markdown guidance plus quick QA prints so students can inspect intermediate results.
