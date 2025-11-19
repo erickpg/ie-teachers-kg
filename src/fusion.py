@@ -26,6 +26,7 @@ from rules import (
     GOV_CUES,
     year_bin,
 )
+from pattern_extractor import org_candidates_from_text
 
 Relation = Literal["worked_at", "studied_at", "teaches", "unknown"]
 OrgType = Literal["university", "company", "unknown"]
@@ -274,6 +275,10 @@ def _build_base_orgs(
     if heuristic_orgs:
         return heuristic_orgs, True
 
+    pattern_orgs = org_candidates_from_text(line_text)
+    if pattern_orgs:
+        return pattern_orgs
+
     ner_org = _select_ner_org(ner)
     if ner_org:
         return [ner_org], False
@@ -351,7 +356,7 @@ def fuse_line(
         if relation == "studied_at" and isinstance(location_list, list):
             if idx < len(location_list):
                 resolved_location = location_list[idx]
-        org_canon = canon_org(org_raw)
+        org_canon = canon_org(strip_preps(org_raw))
         location_canon = canon_location(resolved_location)
         org_type = classify_org(org_canon) or "unknown"
         candidate = LineCandidate(

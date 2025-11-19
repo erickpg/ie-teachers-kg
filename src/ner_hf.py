@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 from transformers import pipeline
 
-from rules import SECTION_STOP_ORGS
+from rules import SECTION_STOP_ORGS, plausible_org, strip_preps
 
 
 def load_pipelines() -> Dict[str, Any]:
@@ -84,8 +84,12 @@ def ner_on_line(line: str, pipes: Dict[str, Any]) -> Dict[str, List[Dict[str, An
             label = (ent.get("label") or "").upper()
             enriched = {**ent, "source": name}
             if label in {"ORG", "ORGANIZATION"}:
-                if enriched["text"].lower() in SECTION_STOP_ORGS:
+                clean_text = strip_preps(enriched["text"])
+                if clean_text.lower() in SECTION_STOP_ORGS:
                     continue
+                if not plausible_org(clean_text):
+                    continue
+                enriched["text"] = clean_text
                 orgs = merge_entities(orgs, [enriched])
             elif label in {"LOC", "GPE"}:
                 locs = merge_entities(locs, [enriched])

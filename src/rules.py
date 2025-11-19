@@ -90,6 +90,26 @@ SECTION_STOP_ORGS = {
     "education",
     "publications",
     "professional experience",
+    # Sustainability/SDG headings that are frequently mistaken for org names
+    "quality education",
+    "industry innovation and infrastructure",
+    "innovation and infraestructure",
+    "sustainable cities and communities",
+    "work and economic growth",
+    "reduced inequalities",
+    "responsible consumption and production",
+    "peace justice and strong institutions",
+    "partnerships for the goals",
+    "climate action",
+    "life below water",
+    "life on land",
+    "no poverty",
+    "zero hunger",
+    "good health and well-being",
+    "gender equality",
+    "clean water and sanitation",
+    "affordable and clean energy",
+    "decent work and economic growth",
 }
 
 HONORS_THESIS_TOKENS = (
@@ -104,7 +124,7 @@ HONORS_THESIS_TOKENS = (
     "honours",
 )
 
-PREP_STRIP_RE = re.compile(r"^(?:by|at|in|of)\s+", re.I)
+PREP_STRIP_RE = re.compile(r"^(?:by|at|in|of|from|with)\s+", re.I)
 
 
 def strip_preps(s: str) -> str:
