@@ -96,7 +96,10 @@ def cluster_and_canonicalize(
 
         buckets = defaultdict(list)
         for item in unique:
-            buckets[canon_location(item)].append(item)
+            canon = canon_location(item)
+            if not canon:
+                continue
+            buckets[canon].append(item)
         for country, items in buckets.items():
             preferred = country if country else max(items, key=len)
             for it in items:
