@@ -352,7 +352,9 @@ def fuse_line(
             if idx < len(location_list):
                 resolved_location = location_list[idx]
         org_canon = canon_org(org_raw)
-        location_canon = canon_location(resolved_location)
+        location_canon = None
+        if resolved_location:
+            location_canon = canon_location(resolved_location) or None
         org_type = classify_org(org_canon) or "unknown"
         candidate = LineCandidate(
             relation=relation,
