@@ -275,7 +275,7 @@ def _build_base_orgs(
     if heuristic_orgs:
         return heuristic_orgs, True
 
-    pattern_orgs = org_candidates_from_text(line_text)
+    pattern_orgs = org_candidates_from_text(line)
     if pattern_orgs:
         return pattern_orgs
 
